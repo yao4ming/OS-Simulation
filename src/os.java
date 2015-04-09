@@ -1,47 +1,46 @@
-/**
- * Created by hp on 3/24/2015.
- */
 
 public class os {
 
-    public os() {
-        System.out.println("hello world");
-    }
 
     public static void startup(){
-        new os();
+        //init
+
     }
 
 
     //---------------------------------------------------INTERRUPT HANDLERS----------------------------------------------------------
 
-    //invoked when job enters and handles placing that job in HDD queue
-    //
+    //job enters drum
     public static void Crint (int[] a, int []p){
 
+        //store state of interrupted job
+
         //store job info in job table
+
+        //long-term scheduler(Decide which job to swap into memory)
+
+        //swapper(swap job into memory)
+
+        //set action and params for SOS
+
     }
 
-    //job I/O is finished
-    //p[5] current time
+    //finished I/O
     public static void Dskint (int[] a, int []p){
 
     }
 
-    //transfer of job from drum to memory completed
-    //p[5] current time
+    //finished swapping job
     public static void Drmint (int[] a, int []p){
 
     }
 
-    //intervalTimer == 0 job ran out of time
-    //p[5] current time
+    //job ran out of time
     public static void Tro (int[] a, int []p) {
         //determine whether it was time-slice or finished
     }
 
-    //system call by a process
-    //p[5] current time
+    //system call
     public static void Svc (int[] a, int []p) {
         switch(a[0]){
             case 5: //terminate
