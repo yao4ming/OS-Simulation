@@ -35,7 +35,10 @@ public class os {
         int CPUArrival;
         int startAddr;
         int timeSlice;
+        int CPU_Usage;
+        int CPUTimeLeft;
         boolean blocked;
+        boolean inCore;
         boolean running;
     }
 
@@ -62,12 +65,23 @@ public class os {
 
     public static void saveJob(int[] p) {
 
-        for (Job job : jobTable) {
-            if (p[1] == job.jobNum && job.running) {   //job was running and interrupted
+        Job job = searchJobTable(p[1]);
+        if (job != null && job.running) {
+            //update cpu usage
+            job.CPU_Usage = job.CPU_Usage + (p[5] - job.CPUArrival);
 
-                //update job info
-            }
+            //update cpu time left
+            job.CPUTimeLeft = job.CPUTimeLeft - (p[5] - job.CPUArrival);
+
+            //update time-slice
+            if (job.timeSlice > job.CPUTimeLeft) job.timeSlice = job.CPUTimeLeft;
+
+            //take job out of cpu
+            job.running = false;
+        }else {
+            System.out.println("No job interrupted");
         }
+
     }
 
     /**
@@ -102,17 +116,20 @@ public class os {
 
     public static void swapper(int jobNum, int jobSize) {
 
+        Job job = searchJobTable(jobNum);
+
         //find space in memory for job
-        jobTable[jobCount].startAddr = firstFit(jobNum, jobSize);
-        if(jobTable[jobCount].startAddr >= 0) {
+        job.startAddr = firstFit(jobNum, jobSize);
+        //valid addr
+        if(job.startAddr >= 0) {
             //swap job into memory
-            sos.siodrum(jobNum, jobSize, jobTable[jobCount].startAddr, 0);
-        }else {
+            sos.siodrum(jobNum, jobSize, job.startAddr, 0);
+        } else {
             System.out.println("Job is too big for free space");
             //swap job out of memory
 
-            jobTable[jobCount].startAddr = firstFit(jobNum, jobSize);
-            sos.siodrum(jobNum, jobSize, jobTable[jobCount].startAddr, 0);
+            job.startAddr = firstFit(jobNum, jobSize);
+            sos.siodrum(jobNum, jobSize, job.startAddr, 0);
         }
     }
 
@@ -128,22 +145,26 @@ public class os {
     public static void blockJob(int jobNum) {
         Job job = searchJobTable(jobNum);
         job.blocked = true;
+        if(jobNum == 2) job.blocked = false;
+        System.out.println("Block Job " + job.jobNum);
     }
 
     public static void unblockJob(int jobNum) {
         Job job = searchJobTable(jobNum);
         job.blocked = false;
+        System.out.println("Unblock Job " + job.jobNum);
     }
 
     public static void runJob(int[] a, int[] p) {
 
+        //cpu idle
         a[0] = 1;
 
         //scheduler
 
-
-        for (Job job : jobTable) {  //loop through jobtable
-            if(job.jobNum != 0 && !job.blocked) {   //found a job to run
+        //loop through jobtable
+        for (Job job : jobTable) {
+            if(job.jobNum != 0 && job.inCore && !job.blocked) {   //found a job to run
                 a[0] = 2;
                 job.running = true;
                 job.CPUArrival = p[5];
@@ -158,27 +179,57 @@ public class os {
 
     public static void terminate(int jobNum, int jobSize) {
 
-        System.out.println("Terminate job " + jobNum + "of size " + jobSize);
+        System.out.println("Terminate job " + jobNum + " of size " + jobSize);
+
+        int startAddr = 0, endAddr = 0; //used to update freespace
 
         //iterate through memory to find job
         for (int i = 0; i < MAXMEMORY; i++) {
             //found start of job
             if (jobNum == memory[i]) {
+                startAddr = i; endAddr = startAddr + jobSize;
                 //remove job from memory
-                for (int j = i; j < i + jobSize; j++) {
+                for (int j = startAddr; j < endAddr; j++) {
                     memory[j] = 0;
                 }
+                break;
             }
         }
 
-        printMemory();
+        //printMemory();
 
         //iterate through jobtable to find job
-        for (int i = 0; i < MAXJOBS; i++) {
-            if (jobTable[i].jobNum == jobNum) jobTable[i].jobNum = 0;   //remove job from jobtable
+        for (Job job : jobTable) {
+            if (job.jobNum == jobNum) {
+                job.jobNum = 0;
+                job.inCore = false;
+            }
         }
 
-        printJobTable();
+        //printJobTable();
+
+
+        //freespace map before update
+        //printFreeSpace();
+
+        //update freespace map
+        for (Integer key : freeSpace.keySet()) {
+            //update freespace where job was removed
+            if (key == endAddr) {
+                int sizeofJob = endAddr - startAddr;
+                int k = key - sizeofJob;
+                int v = freeSpace.get(key) + sizeofJob;
+                freeSpace.put(k, v);
+
+                //remove old key
+                freeSpace.remove(key);
+            }
+            break;
+        }
+
+        //freespace map after update
+        //printFreeSpace();
+
     }
 
     public static Job searchJobTable(int jobNum) {
@@ -188,16 +239,26 @@ public class os {
         return null;
     }
 
+    public static void printFreeSpace() {
+
+        System.out.println("freespace");
+        for (Integer key : freeSpace.keySet()) {
+            System.out.println(key + " " + freeSpace.get(key));
+        }
+    }
+
     public static void printJobTable() {
         System.out.println("Jobtable");
         for (Job job : jobTable) {
-            if(job.jobNum > 0) System.out.println(job.jobNum);
+            if(job.jobNum > 0) System.out.println("Job Num " + job.jobNum + " in memory");
         }
     }
 
     public static void printMemory() {
         System.out.println("Memory");
-        for (int memBlock : memory) System.out.println(memBlock);
+        for (int i = 0; i < memory.length; i++) {
+            System.out.println(i + " " + memory[i]);
+        }
     }
 
     //---------------------------------------------------INTERRUPT HANDLERS----------------------------------------------------------
@@ -215,9 +276,11 @@ public class os {
         jobTable[jobCount].priority = p[2];
         jobTable[jobCount].jobSize = p[3];
         jobTable[jobCount].MaxCPUTime = p[4];
+        jobTable[jobCount].CPUTimeLeft = p[4];
         jobTable[jobCount].DrumArrival = p[5];
-        jobTable[jobCount].timeSlice = 4;
+        jobTable[jobCount].timeSlice = 5;
         jobTable[jobCount].blocked = false;
+        jobTable[jobCount].inCore = false;
         jobTable[jobCount].running = false;
 
         //long-term scheduler(Decide which job to swap into memory)
@@ -225,8 +288,7 @@ public class os {
         //allocate job into memory
         swapper(p[1], p[3]);
 
-        //set action and params for SOS
-        a[0] = 1;
+        runJob(a, p);
 
         jobCount++;
     }
@@ -236,6 +298,9 @@ public class os {
 
         //store state of interrupted job
         saveJob(p);
+
+        Job job = searchJobTable(p[1]);
+        job.inCore = true;
 
         //set action and params for SOS
         runJob(a, p);
@@ -273,15 +338,16 @@ public class os {
     }
 
     //job ran out of time
-    public static void Tro (int[] a, int []p) {
+    public static void Tro (int[] a, int[] p) {
 
         saveJob(p);
 
-        //determine whether it was time-slice or finished
-        System.out.println("Job ran out of time");
+        Job job = searchJobTable(p[1]);
+        if (job.CPU_Usage == job.MaxCPUTime) {
+
+            terminate(job.jobNum, job.jobSize);
+        }
 
         runJob(a, p);
     }
-
-
 }
