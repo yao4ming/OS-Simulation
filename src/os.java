@@ -26,17 +26,35 @@ public class os {
             MaxCPUTime = maxCPUTime;
             this.DrumArrival = DrumArrival;
         }
-
+        
+        public void assign(Job j){
+            jobNum = j.jobNum;
+            priority = j.priority;
+            jobSize = j.jobSize;
+            MaxCPUTime = j.MaxCPUTime;
+            DrumArrival = j.DrumArrival;
+            MemoryArrival = j.MemoryArrival;
+            CPUArrival = j.CPUArrival;
+            startAddr = j.startAddr;
+            timeSlice = j.timeSlice;
+            CPU_Usage = j.CPU_Usage;
+            CPUTimeLeft = j.CPUTimeLeft;
+            blocked = j.blocked;
+            running =j.running;
+            inCore = j.inCore;
+        }
+        
         int jobNum;
         int priority;
         int jobSize;
         int MaxCPUTime;
         int DrumArrival;
+        int MemoryArrival;// for CPU scheduler
         int CPUArrival;
         int startAddr;
         int timeSlice;
         int CPU_Usage;
-        int CPUTimeLeft;
+        int CPUTimeLeft;    
         boolean blocked;
         boolean inCore;
         boolean running;
@@ -114,7 +132,7 @@ public class os {
         return -1;
     }
 
-    public static void swapper(int jobNum, int jobSize) {
+    public static void swapper(int jobNum, int jobSize, int currentTime) {
 
         Job job = searchJobTable(jobNum);
 
@@ -124,6 +142,8 @@ public class os {
         if(job.startAddr >= 0) {
             //swap job into memory
             sos.siodrum(jobNum, jobSize, job.startAddr, 0);
+            job.MemoryArrival = currentTime ;
+
         } else {
             System.out.println("Job is too big for free space");
             //swap job out of memory
@@ -161,6 +181,33 @@ public class os {
         a[0] = 1;
 
         //scheduler
+         
+      //assign temJob with the first job in the job table, not the index 0 job
+        Job temJob = new Job();
+        for(Job job : jobTable){
+            if(job.jobNum != 0) {
+                temJob.assign(job);
+                break;
+            }
+        }       
+        //FCFS
+        for(Job job : jobTable){
+            if( job.MemoryArrival < temJob.MemoryArrival && job.jobNum != 0){
+                temJob.assign(job);
+            }
+        }
+        //run the job
+        if(!temJob.blocked && temJob.jobNum != 0 && temJob.inCore){
+            a[0] = 2;
+            temJob.running = true;
+            temJob.CPUArrival = p[5];
+            p[2] = temJob.startAddr;
+            p[3] = temJob.jobSize;
+            p[4] = temJob.timeSlice;
+            System.out.println("Running job " + temJob.jobNum);
+        }
+
+        /*
 
         //loop through jobtable
         for (Job job : jobTable) {
@@ -175,6 +222,7 @@ public class os {
                 break;
             }
         }
+        */
     }
 
     public static void terminate(int jobNum, int jobSize) {
@@ -286,7 +334,7 @@ public class os {
         //long-term scheduler(Decide which job to swap into memory)
 
         //allocate job into memory
-        swapper(p[1], p[3]);
+        swapper(p[1], p[3], p[5]);
 
         runJob(a, p);
 
