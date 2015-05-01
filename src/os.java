@@ -102,6 +102,10 @@ public class os {
                 //remove old freespace
                 freeSpace.remove(freeAddr);
 
+                printMemory();
+
+                printFreeSpace();
+
                 return freeAddr;
             }
         }
@@ -158,7 +162,7 @@ public class os {
         System.out.println("Block Job " + job.num);
         if (!job.doingIO) {
             job.blocked = false;
-            System.out.println("Unblock job b/c its not doing I/O");
+            System.out.println("Unblock job b/c it is not doing I/O");
         }
     }
 
@@ -240,7 +244,50 @@ public class os {
         return null;
     }
 
-    public static void mergeFreeSpace() {
+    public static void updateFreeSpace(int startAddr, int endAddr, int jobSize) {
+        //freespace map before update
+        printFreeSpace();
+
+        boolean after = false, before = false;
+        int freeAddr = -1, freeSize = -1, newSize = -1;
+        int spaceBeforeJob = -1, spaceAfterJob = -1;
+        for (Integer key : freeSpace.keySet()) {
+
+            freeAddr = key;
+            freeSize = freeSpace.get(key);
+
+            if (freeAddr + freeSize == startAddr) {     //job terminated is after freespace
+                after = true;
+                spaceBeforeJob = freeAddr;
+            }
+            else if (freeAddr == endAddr) {       //job terminated is before freespace
+                before = true;
+                spaceAfterJob = freeAddr;
+            }
+        }
+
+        if (after && !before) {
+            newSize = freeSpace.get(spaceBeforeJob) + jobSize;
+            freeSpace.remove(spaceBeforeJob);
+            freeSpace.put(spaceBeforeJob, newSize);
+        }
+        else if (before && !after) {
+            newSize = freeSpace.get(spaceAfterJob) + jobSize;
+            freeSpace.remove(spaceAfterJob);
+            freeSpace.put(startAddr, newSize);
+        }
+        else if (before && after) {
+            newSize = freeSpace.get(spaceBeforeJob) + jobSize + freeSpace.get(spaceAfterJob);
+            freeSpace.remove(spaceBeforeJob);
+            freeSpace.remove(spaceAfterJob);
+            freeSpace.put(spaceBeforeJob, newSize);
+        }
+        else {
+            freeSpace.put(startAddr, jobSize);
+        }
+
+        //freespace map after update
+        printFreeSpace();
 
     }
 
@@ -263,29 +310,9 @@ public class os {
             }
         }
 
-        //printMemory();
+        printMemory();
 
-
-        //freespace map before update
-        printFreeSpace();
-
-
-
-        //merge contiguous freespace
-        if (freeSpace.containsKey(endAddr)) {
-            int newSize = freeSpace.get(endAddr) + job.size; //value = old value + sizeof(job)
-            freeSpace.put(startAddr, newSize);
-
-            //remove old key
-            freeSpace.remove(endAddr);
-        }
-        else {
-            //update freespace where job was removed
-            freeSpace.put(startAddr, job.size);
-        }
-
-        //freespace map after update
-        printFreeSpace();
+        updateFreeSpace(startAddr, endAddr, job.size);
 
 
         job.num = 0;
@@ -318,8 +345,14 @@ public class os {
 
     public static void printMemory() {
         System.out.println("Memory");
-        for (int i = 0; i < memory.length; i++) {
-            System.out.println(i + " " + memory[i]);
+        for (int i = 0; i < memory.length / 5; i++) {
+            int j = i + 20, k = i + 40, l = i + 60, m = i + 80;
+            System.out.println(i + " " + memory[i] +
+                            " \t " + j + " " + memory[j] +
+                            " \t " + k + " " + memory[k] +
+                            " \t " + l + " " + memory[l] +
+                            " \t " + m + " " + memory[m]
+            );
         }
     }
 
@@ -330,7 +363,7 @@ public class os {
 
         jobCount++;
 
-        sos.ontrace();
+        //sos.ontrace();
 
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
