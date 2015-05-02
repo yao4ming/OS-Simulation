@@ -2,7 +2,8 @@ import java.util.*;
 
 public class os {
 
-    static int jobCount;
+    //job management
+    static int tableIndex = 0;
     static Job[] jobTable;
     static final int MAXJOBS = 50;
     static final int MAXMEMORY = 100;
@@ -13,25 +14,36 @@ public class os {
 
     //I/O Management
     static Queue<Integer> diskQueue;
-    static boolean diskbusy;
+    static boolean diskbusy = false;
 
     //HDD Management
     static List<Integer> drumQueue;
-    static boolean drumbusy;
+    static boolean drumbusy = false;
 
     public static class Job {
+
+        public Job(int num, int priority, int size, int maxCPUTime, int drumArrival, int timeSlice) {
+            this.num = num;
+            this.priority = priority;
+            this.size = size;
+            this.maxCPUTime = maxCPUTime;
+            this.drumArrival = drumArrival;
+            this.timeSlice = timeSlice;
+            this.CPUTimeLeft = maxCPUTime;
+        }
 
         int num;
         int priority;
         int size;
-        int MaxCPUTime;
-        int DrumArrival;
+        int maxCPUTime;
+        int drumArrival;
         int CPUArrival;
         int startAddr;
         int timeSlice;
         int CPU_Usage;
         int CPUTimeLeft;
         boolean inTransit;
+        boolean awaitingIO;
         boolean doingIO;
         boolean blocked;
         boolean inCore;
@@ -42,9 +54,8 @@ public class os {
     public static void startup() {
 
         //JobTable
-        jobCount = -1;
         jobTable = new Job[MAXJOBS];
-        for (int i = 0; i < MAXJOBS; i++) jobTable[i] = new Job();
+        for (int i = 0; i < MAXJOBS; i++) jobTable[i] = null;
 
         //memory management
         memory = new int[MAXMEMORY];
@@ -56,7 +67,6 @@ public class os {
 
         //drum management
         drumQueue = new ArrayList<Integer>();
-        drumbusy = false;
 
     }
 
@@ -134,43 +144,58 @@ public class os {
         }
     }
 
-    //add job into drumQueue
-    //return first job in queue
+    //add job to drumQueue
     public static void requestDrum(int jobNum) {
         drumQueue.add(jobNum);
         System.out.println(drumQueue);
     }
 
     //add job to diskQueue
-    //start I/O for first job in queue
     public static void requestIO(Job job) {
 
         //add I/O request to diskQueue
         diskQueue.add(job.num);
+        job.awaitingIO = true;
         System.out.println(diskQueue);
 
+    }
+
+    //start I/O for first job in queue
+    public static void startIO() {
+
         //pop top of queue
-        if (!diskbusy) {
-            sos.siodisk(diskQueue.poll());
-            job.doingIO = true;
+        if (!diskbusy && diskQueue.peek() != null) {
+
+            Job top = searchJobTable(diskQueue.poll());
+            sos.siodisk(top.num);
+            top.doingIO = true;
+            top.awaitingIO = false;
             diskbusy = true;
         }
     }
 
+    //block job
     public static void blockJob(Job job) {
+
         job.blocked = true;
         System.out.println("Block Job " + job.num);
-        if (!job.doingIO) {
-            job.blocked = false;
-            System.out.println("Unblock job b/c it is not doing I/O");
+
+        //unblock if job not in diskQueue and not doing I/O
+        if (!job.awaitingIO && !job.doingIO) {
+            unblockJob(job);
+            System.out.println("Unblock job b/c it is not waiting for I/O");
         }
+
     }
 
+    //unblock job
     public static void unblockJob(Job job) {
         job.blocked = false;
         System.out.println("Unblock Job " + job.num);
     }
 
+    //if drum not busy, search drumQueue for job that fits into freespace
+    //swap job into freespace
     public static void swapJob() {
 
         if (!drumbusy) {
@@ -201,9 +226,11 @@ public class os {
 
         //scheduler
 
+        //printJobTable();
+
         //loop through jobtable
         for (Job job : jobTable) {
-            if(job.num != 0 && job.inCore && !job.blocked && !job.kill) {   //found a job to run
+            if(job != null && job.inCore && !job.blocked && !job.kill) {   //found a job to run
                 a[0] = 2;
                 job.running = true;
                 job.CPUArrival = p[5];
@@ -216,32 +243,60 @@ public class os {
         }
     }
 
+    //returns job currently running on cpu
     public static Job currentJob() {
         for (Job job : jobTable) {
-            if (job.running) {
-                return job;
+            if (job != null) {
+                if (job.running) return job;
             }
+
         }
         return null;
     }
 
+    //returns job in transmission between drum -> memory, memory -> drum
     public static Job jobInTransit() {
         for (Job job  : jobTable) {
-            if (job.inTransit) {
+            if (job != null && job.inTransit) {
                 return job;
             }
         }
         return null;
     }
 
+    //returns Job doing I/O
     public static Job jobInIO() {
-        //find job that finished I/O
+        //find job doing I/O
         for (Job job : jobTable) {
-            if (job.doingIO) {
+            if (job != null && job.doingIO) {
                 return job;
             }
         }
         return null;
+    }
+
+    //removes job from memory
+    //returns start and end address of job used to update freespace
+    public static int[] updateMemory(Job job) {
+
+        int startAddr = 0, endAddr = 0;
+
+        //iterate through memory to find job
+        for (int i = 0; i < MAXMEMORY; i++) {
+            //found start of job
+            if (job.num == memory[i]) {
+                startAddr = i;
+                endAddr = startAddr + job.size;
+                //remove job from memory
+                for (int j = startAddr; j < endAddr; j++) {
+                    memory[j] = 0;
+                }
+                break;
+            }
+        }
+
+        int[] addrs = {startAddr, endAddr};
+        return addrs;
     }
 
     public static void updateFreeSpace(int startAddr, int endAddr, int jobSize) {
@@ -266,20 +321,20 @@ public class os {
             }
         }
 
-        if (after && !before) {
-            newSize = freeSpace.get(spaceBeforeJob) + jobSize;
+        if (before && after) {
+            newSize = freeSpace.get(spaceBeforeJob) + jobSize + freeSpace.get(spaceAfterJob);
             freeSpace.remove(spaceBeforeJob);
+            freeSpace.remove(spaceAfterJob);
             freeSpace.put(spaceBeforeJob, newSize);
         }
-        else if (before && !after) {
+        else if (before) {
             newSize = freeSpace.get(spaceAfterJob) + jobSize;
             freeSpace.remove(spaceAfterJob);
             freeSpace.put(startAddr, newSize);
         }
-        else if (before && after) {
-            newSize = freeSpace.get(spaceBeforeJob) + jobSize + freeSpace.get(spaceAfterJob);
+        else if (after) {
+            newSize = freeSpace.get(spaceBeforeJob) + jobSize;
             freeSpace.remove(spaceBeforeJob);
-            freeSpace.remove(spaceAfterJob);
             freeSpace.put(spaceBeforeJob, newSize);
         }
         else {
@@ -291,39 +346,49 @@ public class os {
 
     }
 
-    public static void terminate(Job job) {
-
-        System.out.println("Terminate job " + job.num + " of size " + job.size);
-
-        int startAddr = 0, endAddr = 0; //used to update freespace
-
-        //iterate through memory to find job
-        for (int i = 0; i < MAXMEMORY; i++) {
-            //found start of job
-            if (job.num == memory[i]) {
-                startAddr = i; endAddr = startAddr + job.size;
-                //remove job from memory
-                for (int j = startAddr; j < endAddr; j++) {
-                    memory[j] = 0;
-                }
+    //remove job from jobtable
+    public static void updateJobTable(int jobNum) {
+        for (int i = 0; i < MAXJOBS; i++) {
+            if (jobTable[i] != null && jobTable[i].num == jobNum) {
+                jobTable[i] = null;
                 break;
             }
         }
 
-        printMemory();
+        printJobTable();
 
-        updateFreeSpace(startAddr, endAddr, job.size);
+        System.out.println();
+    }
 
+    //set tableindex at position of terminated job in jobtable
+    public static void setTableIndex() {
 
-        job.num = 0;
-        job.inCore = false;
-        //printJobTable();
+        for (int i = 0; i < MAXJOBS; i++) {
+            if (jobTable[i] == null) {
+                tableIndex = i;
+                break;
+            }
+        }
+    }
+
+    public static void terminate(Job job) {
+
+        System.out.println("Terminate job " + job.num + " of size " + job.size);
+
+        int[] addrs = updateMemory(job);    printMemory();
+
+        updateFreeSpace(addrs[0], addrs[1], job.size);
+
+        updateJobTable(job.num);
 
     }
 
     public static Job searchJobTable(int jobNum) {
         for (Job job : jobTable) {
-            if(job.num == jobNum) return job;
+            if (job != null && job.num == jobNum) {
+                return job;
+            }
+
         }
         return null;
     }
@@ -338,9 +403,14 @@ public class os {
 
     public static void printJobTable() {
         System.out.println("Jobtable");
+        int i = 1;
         for (Job job : jobTable) {
-            if(job.num > 0) System.out.println("Job Num " + job.num + " in memory");
+            if(job != null) {
+                System.out.println("Job Num " + job.num + " in memory " + i);
+                i++;
+            }
         }
+
     }
 
     public static void printMemory() {
@@ -361,24 +431,16 @@ public class os {
     //job enters drum
     public static void Crint (int[] a, int[] p) {
 
-        jobCount++;
 
         //sos.ontrace();
 
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
 
-        //store job info in jobtable
-        jobTable[jobCount].num = p[1];
-        jobTable[jobCount].priority = p[2];
-        jobTable[jobCount].size = p[3];
-        jobTable[jobCount].MaxCPUTime = p[4];
-        jobTable[jobCount].CPUTimeLeft = p[4];
-        jobTable[jobCount].DrumArrival = p[5];
-        jobTable[jobCount].timeSlice = 5;
-        jobTable[jobCount].blocked = false;
-        jobTable[jobCount].inCore = false;
-        jobTable[jobCount].running = false;
+        setTableIndex();
+
+        //store job in jobtable
+        jobTable[tableIndex] = new Job(p[1], p[2], p[3], p[4], p[5], 7);
 
         //long-term scheduler(add job to drumQueue)
         requestDrum(p[1]);
@@ -413,11 +475,12 @@ public class os {
 
         switch(a[0]) {
             case 5: //terminate
-                if (currJob.doingIO) currJob.kill = true;
+                if (currJob.doingIO || currJob.awaitingIO) currJob.kill = true;
                 else terminate(currJob);
                 break;
             case 6: //I/O
                 requestIO(currJob);
+                startIO();
                 break;
             case 7: //block
                 blockJob(currJob);
@@ -434,11 +497,15 @@ public class os {
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
 
+        //job finished I/O
         Job ioJob = jobInIO();
         ioJob.doingIO = false;
         if (ioJob.kill) terminate(ioJob);
         if (ioJob.blocked) unblockJob(ioJob);
         diskbusy = false;
+
+        //start another job I/O
+        startIO();
 
         swapJob();
         runJob(a, p);
@@ -450,9 +517,10 @@ public class os {
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
 
-        if (currJob.CPU_Usage == currJob.MaxCPUTime) {
+        if (currJob.CPU_Usage == currJob.maxCPUTime) {
 
-            terminate(currJob);
+            if (currJob.awaitingIO) currJob.kill = true;
+            else terminate(currJob);
         }
 
         swapJob();
