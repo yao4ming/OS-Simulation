@@ -219,37 +219,48 @@ public class os {
         }
     }
 
+    public static Job roundRobin() {
+        for (Job job : jobTable) {
+            if(job != null && job.inCore && !job.blocked && !job.kill)   //found a job to run
+                return job;
+        }
+        return null;
+
+
+        //xiangteng RR code here
+    }
+
     public static void runJob(int[] a, int[] p) {
 
         //cpu idle
         a[0] = 1;
 
         //scheduler
+        Job job = roundRobin();
 
         //printJobTable();
 
-        //loop through jobtable
-        for (Job job : jobTable) {
-            if(job != null && job.inCore && !job.blocked && !job.kill) {   //found a job to run
-                a[0] = 2;
-                job.running = true;
-                job.CPUArrival = p[5];
-                p[2] = job.startAddr;
-                p[3] = job.size;
-                p[4] = job.timeSlice;
-                System.out.println("Running job " + job.num);
-                break;
-            }
+        if (job != null) {
+            a[0] = 2;
+            job.running = true;
+            job.CPUArrival = p[5];
+            p[2] = job.startAddr;
+            p[3] = job.size;
+            p[4] = job.timeSlice;
+            System.out.println("Running job " + job.num);
         }
+        else {
+            System.out.println("No job to run");
+        }
+
     }
 
     //returns job currently running on cpu
     public static Job currentJob() {
         for (Job job : jobTable) {
-            if (job != null) {
-                if (job.running) return job;
+            if (job != null && job.running) {
+                return job;
             }
-
         }
         return null;
     }
