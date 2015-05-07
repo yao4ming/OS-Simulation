@@ -42,6 +42,7 @@ public class os {
         int timeSlice;
         int CPU_Usage;
         int CPUTimeLeft;
+        int RR;
         boolean inTransit;
         boolean awaitingIO;
         boolean doingIO;
@@ -123,6 +124,46 @@ public class os {
         return -1;
     }
 
+    //return start addr for job
+    //return -1, job doesn't fit into freespace
+    public static int bestFit(int jobNum, int jobSize) {
+
+        int startAddr = -1, min = 100;
+        boolean spaceFound = false;
+        for (Integer addr : freeSpace.keySet()) {
+
+            //job fit into freespace
+            if (jobSize <= freeSpace.get(addr)) {
+
+                //smallest freespace that fits
+                if (freeSpace.get(addr) - jobSize < min) {
+                    min = freeSpace.get(addr) - jobSize;
+                    startAddr = addr;
+                    spaceFound = true;
+                }
+            }
+        }
+
+        if (spaceFound) {
+
+            //allocate job into memory
+            for (int i = startAddr; i < startAddr + jobSize; i++) memory[i] = jobNum;
+
+            //new freespace
+            int space = freeSpace.get(startAddr) - jobSize;
+            if (space > 0) freeSpace.put(startAddr + jobSize, space);
+
+            //remove old freespace
+            freeSpace.remove(startAddr);
+
+            printMemory();
+
+            printFreeSpace();
+        }
+
+        return startAddr;
+    }
+
     //swaps job into memory
     //if memory is full, swap out a job, then swap in
     public static void swapper(int jobNum) {
@@ -130,7 +171,7 @@ public class os {
         Job job = searchJobTable(jobNum);
 
         //find space in memory for job
-        job.startAddr = firstFit(job.num, job.size);
+        job.startAddr = bestFit(job.num, job.size);
         //valid addr
         if(job.startAddr >= 0) {
             //swap job into memory
@@ -139,7 +180,7 @@ public class os {
             System.out.println("Job is too big for free space");
             //swap job out of memory
 
-            job.startAddr = firstFit(job.num, job.size);
+            job.startAddr = bestFit(job.num, job.size);
             sos.siodrum(jobNum, job.size, job.startAddr, 0);
         }
     }
@@ -147,7 +188,7 @@ public class os {
     //add job to drumQueue
     public static void requestDrum(int jobNum) {
         drumQueue.add(jobNum);
-        System.out.println(drumQueue);
+        System.out.println("DrumQueue: " + drumQueue);
     }
 
     //add job to diskQueue
@@ -156,7 +197,7 @@ public class os {
         //add I/O request to diskQueue
         diskQueue.add(job.num);
         job.awaitingIO = true;
-        System.out.println(diskQueue);
+        System.out.println("DiskQueue: " + diskQueue);
 
     }
 
@@ -219,17 +260,41 @@ public class os {
         }
     }
 
-    public static Job roundRobin() {
+    //check if every job in memory has run
+    public static boolean isOneRRFinish() {
         for (Job job : jobTable) {
-            if(job != null && job.inCore && !job.blocked && !job.kill)   //found a job to run
-                return job;
+            if (job != null && job.inCore && job.RR == 0) return false;
         }
-        return null;
-
-
-        //xiangteng RR code here
+        return true;
     }
 
+    //return a job to run using RR algorithm
+    public static Job roundRobin() {
+
+        //if RR complete, reset to 0
+        if(isOneRRFinish()) {
+            for(Job j : jobTable) {
+                if(j != null && j.inCore && !j.blocked && !j.kill) j.RR = 0;
+            }
+        }
+
+        //printJobTable();
+
+        //find next job to run
+        for (Job job : jobTable) {
+
+            //job to run
+            if (job != null && job.inCore && !job.blocked && !job.kill && job.RR == 0) {
+                job.RR = 1;
+                return job;
+            }
+        }
+
+        return null;
+    }
+
+    //a = 1, if no job to run
+    //a = 2, set job to run, size, cpuArrival, timeslice
     public static void runJob(int[] a, int[] p) {
 
         //cpu idle
@@ -416,10 +481,13 @@ public class os {
         System.out.println("Jobtable");
         int i = 1;
         for (Job job : jobTable) {
-            if(job != null) {
+            if(job != null && job.inCore) {
                 System.out.println("Job Num " + job.num + " in memory " + i);
-                i++;
             }
+            else if (job != null) {
+                System.out.println("Job num " + job.num + " " + i);
+            }
+            i++;
         }
 
     }
@@ -443,7 +511,7 @@ public class os {
     public static void Crint (int[] a, int[] p) {
 
 
-        //sos.ontrace();
+        sos.ontrace();
 
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
@@ -530,7 +598,7 @@ public class os {
 
         if (currJob.CPU_Usage == currJob.maxCPUTime) {
 
-            if (currJob.awaitingIO) currJob.kill = true;
+            if (currJob.doingIO || currJob.awaitingIO) currJob.kill = true;
             else terminate(currJob);
         }
 
