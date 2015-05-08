@@ -1,3 +1,5 @@
+import com.google.common.collect.Iterables;
+
 import java.util.*;
 
 public class os {
@@ -10,15 +12,19 @@ public class os {
 
     //memory management
     static int[] memory;
+    static List<Job> jobsInMemory;
     static Map<Integer, Integer> freeSpace;
 
+
     //I/O Management
-    static Queue<Integer> diskQueue;
+    static LinkedList<Integer> diskQueue;
     static boolean diskbusy = false;
 
     //HDD Management
     static List<Integer> drumQueue;
     static boolean drumbusy = false;
+    static boolean swappingIN = false;
+    static boolean waitingOnDrum = false;
 
     public static class Job {
 
@@ -27,6 +33,7 @@ public class os {
             this.priority = priority;
             this.size = size;
             this.maxCPUTime = maxCPUTime;
+            this.age = maxCPUTime;
             this.drumArrival = drumArrival;
             this.timeSlice = timeSlice;
             this.CPUTimeLeft = maxCPUTime;
@@ -43,6 +50,7 @@ public class os {
         int CPU_Usage;
         int CPUTimeLeft;
         int RR;
+        int age;
         boolean inTransit;
         boolean awaitingIO;
         boolean doingIO;
@@ -60,8 +68,10 @@ public class os {
 
         //memory management
         memory = new int[MAXMEMORY];
+        jobsInMemory = new ArrayList<Job>();
         freeSpace = new HashMap<Integer, Integer>();
         freeSpace.put(0, MAXMEMORY);
+
 
         //I/O management
         diskQueue = new LinkedList<Integer>();
@@ -164,31 +174,65 @@ public class os {
         return startAddr;
     }
 
-    //swaps job into memory
-    //if memory is full, swap out a job, then swap in
-    public static void swapper(int jobNum) {
+    //use fitting algorithm to find memory location for job
+    //swap job into memory
+    public static void swapIn(int jobNum) {
 
         Job job = searchJobTable(jobNum);
 
         //find space in memory for job
         job.startAddr = bestFit(job.num, job.size);
-        //valid addr
-        if(job.startAddr >= 0) {
-            //swap job into memory
-            sos.siodrum(jobNum, job.size, job.startAddr, 0);
-        } else {
-            System.out.println("Job is too big for free space");
-            //swap job out of memory
 
-            job.startAddr = bestFit(job.num, job.size);
-            sos.siodrum(jobNum, job.size, job.startAddr, 0);
-        }
+        //if valid addr, swap job into memory
+        if(job.startAddr >= 0) sos.siodrum(jobNum, job.size, job.startAddr, 0);
+        else System.out.println();
+
+        job.inTransit = true;
+        drumbusy = true;
+        swappingIN = true;
     }
 
-    //add job to drumQueue
-    public static void requestDrum(int jobNum) {
-        drumQueue.add(jobNum);
-        System.out.println("DrumQueue: " + drumQueue);
+    //swap job out to drumQueue
+    public static void swapOut(int jobNum) {
+
+        Job job = searchJobTable(jobNum);
+
+        int[] addrs = updateMemory(job);
+        updateFreeSpace(addrs[0], addrs[1], job.size);
+
+        sos.siodrum(job.num, job.size, job.startAddr, 1);
+
+        job.inTransit = true;
+        job.inCore = false;
+        job.RR = 0;
+        drumbusy = true;
+        System.out.println();
+    }
+
+    //add jobs with maxcputime < 1000 to drumQueue
+    //jobs with maxcputime > 1000 wait longer (lower priority)
+    public static void priorityScheduler() {
+
+        for (Job job : jobTable) {
+
+            if (job != null) {
+                if (job.age < 1000) {
+                    drumQueue.add(job.num);
+                }
+                else if (job.age < 5000) {
+                    job.age -= 10;
+                }
+                else if (job.age < 10000) {
+                    job.age -= 10;
+                }
+                else if (job.age < 50000) {
+                    job.age -= 10;
+                }
+                else {
+                    System.out.println("Add last");
+                }
+            }
+        }
     }
 
     //add job to diskQueue
@@ -197,21 +241,62 @@ public class os {
         //add I/O request to diskQueue
         diskQueue.add(job.num);
         job.awaitingIO = true;
+
         System.out.println("DiskQueue: " + diskQueue);
+        System.out.println();
 
     }
 
-    //start I/O for first job in queue
+    //swap I/O job back into memory
+    public static void swapJobBackIn(Job top) {
+
+        //find space for job
+        for (Integer addr : freeSpace.keySet()) {
+
+            //job fits into freespace
+            if (top.size < freeSpace.get(addr)) {
+                swapIn(top.num);
+                return;
+            }
+        }
+
+        //swap out jobs to make space
+        Job swapoutJob = swappableJob();
+        if (swapoutJob != null) {
+            swapOut(swapoutJob.num);
+        }
+
+    }
+
+    public static Job swappableJob() {
+
+        //find job to swap out
+        for (Job job : jobsInMemory) {
+            if (!job.doingIO) return job;
+        }
+        return null;
+    }
+
+    //start I/O for first job in queue, if not incore swap in
     public static void startIO() {
 
-        //pop top of queue
+        //check if disk is busy
         if (!diskbusy && diskQueue.peek() != null) {
 
-            Job top = searchJobTable(diskQueue.poll());
-            sos.siodisk(top.num);
-            top.doingIO = true;
-            top.awaitingIO = false;
-            diskbusy = true;
+            Job top = searchJobTable(diskQueue.peek());
+
+            //if job not incore, swap job in
+            if (!top.inCore) {
+                if (!drumbusy) swapJobBackIn(top);
+            }
+
+            if (top.inCore) {
+                sos.siodisk(top.num);
+                top.doingIO = true;
+                top.awaitingIO = false;
+                diskQueue.poll();
+                diskbusy = true;
+            }
         }
     }
 
@@ -235,11 +320,24 @@ public class os {
         System.out.println("Unblock Job " + job.num);
     }
 
+
     //if drum not busy, search drumQueue for job that fits into freespace
     //swap job into freespace
     public static void swapJob() {
 
         if (!drumbusy) {
+
+            //memory is free
+            if (freeSpace.containsValue(100)) {
+                //find a job with high priority
+                for (Job j : jobTable) {
+                    if (j != null) {
+                        drumQueue.add(j.num);
+                        break;
+                    }
+                }
+            }
+
             //traverse drumQueue for job to swap into memory
             for (int jobNum : drumQueue) {
 
@@ -250,47 +348,68 @@ public class os {
 
                     //job fits into freespace
                     if (job.size < freeSpace.get(addr)) {
-                        swapper(jobNum);
-                        drumbusy = true;
-                        job.inTransit = true;
+                        swapIn(jobNum);
                         return;
+                    }
+                }
+            }
+
+            //attempt to swap jobs out if drumQueue is too big
+            if (drumQueue.size() > 20) {
+
+                //traverse diskQueue starting in the back
+                ListIterator<Integer> diskIter = diskQueue.listIterator(diskQueue.size());
+
+                while (diskIter.hasPrevious()) {
+                    Job j = searchJobTable(diskIter.previous());
+
+                    //swap out job if incore
+                    if (j.inCore && j.num != diskQueue.peek()) {
+                        swapOut(j.num);
+                        System.out.println("Swap out job " + j.num);
+                        printJobTable();
+                        break;
                     }
                 }
             }
         }
     }
 
-    //check if every job in memory has run
-    public static boolean isOneRRFinish() {
-        for (Job job : jobTable) {
-            if (job != null && job.inCore && job.RR == 0) return false;
+    public static boolean isRunnable(Job job) {
+        if (!job.blocked && !job.kill && !job.inTransit && job.inCore) return true;
+        else return false;
+    }
+
+    public static boolean isRRFinish() {
+        for (Job job : jobsInMemory) {
+            if (isRunnable(job) && job.RR == 0) return false;
         }
         return true;
+    }
+
+    public static void resetRR() {
+        for (Job job : jobsInMemory) {
+            if (job.RR == 1) job.RR = 0;
+        }
     }
 
     //return a job to run using RR algorithm
     public static Job roundRobin() {
 
-        //if RR complete, reset to 0
-        if(isOneRRFinish()) {
-            for(Job j : jobTable) {
-                if(j != null && j.inCore && !j.blocked && !j.kill) j.RR = 0;
-            }
-        }
+        //check if all jobs ran RR
+        boolean RRfinish = isRRFinish();
+        if (RRfinish) resetRR();
 
-        //printJobTable();
-
-        //find next job to run
-        for (Job job : jobTable) {
-
-            //job to run
-            if (job != null && job.inCore && !job.blocked && !job.kill && job.RR == 0) {
+        //find job in runnable memory with RR = 0
+        for (Job job : jobsInMemory) {
+            //return job to run RR
+            if (isRunnable(job) && job.RR == 0) {
                 job.RR = 1;
                 return job;
             }
         }
-
         return null;
+
     }
 
     //a = 1, if no job to run
@@ -350,6 +469,7 @@ public class os {
         }
         return null;
     }
+
 
     //removes job from memory
     //returns start and end address of job used to update freespace
@@ -451,11 +571,17 @@ public class os {
 
         System.out.println("Terminate job " + job.num + " of size " + job.size);
 
-        int[] addrs = updateMemory(job);    printMemory();
+        int[] addrs = updateMemory(job);
+
+        jobsInMemory.remove(job);
+
+        printMemory();
 
         updateFreeSpace(addrs[0], addrs[1], job.size);
 
         updateJobTable(job.num);
+
+
 
     }
 
@@ -485,10 +611,11 @@ public class os {
                 System.out.println("Job Num " + job.num + " in memory " + i);
             }
             else if (job != null) {
-                System.out.println("Job num " + job.num + " " + i);
+                System.out.println("Job num " + job.num + " priority " + job.priority + " " + i);
             }
             i++;
         }
+        System.out.println();
 
     }
 
@@ -510,8 +637,7 @@ public class os {
     //job enters drum
     public static void Crint (int[] a, int[] p) {
 
-
-        sos.ontrace();
+        //sos.ontrace();
 
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
@@ -522,8 +648,7 @@ public class os {
         jobTable[tableIndex] = new Job(p[1], p[2], p[3], p[4], p[5], 7);
 
         //long-term scheduler(add job to drumQueue)
-        requestDrum(p[1]);
-
+        priorityScheduler();
         swapJob();
         runJob(a, p);
     }
@@ -534,13 +659,29 @@ public class os {
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
 
+        drumbusy = false;
+
         Job job = jobInTransit();
         job.inTransit = false;
-        job.inCore = true;
 
-        //drum finished swapping job into memory
-        drumbusy = false;
-        drumQueue.remove(new Integer(job.num));
+        //swapped in, remove job from drumQueue
+        if (swappingIN) {
+            swappingIN = false;
+            job.inCore = true;
+            drumQueue.remove(new Integer(job.num));
+            jobsInMemory.add(job);
+        }
+        //swapped out, add job to drumQueue
+        else {
+            jobsInMemory.remove(job);
+            drumQueue.add(job.num);
+        }
+
+        //finish swapping jobs out for I/O job
+        if (waitingOnDrum) {
+            Job top = searchJobTable(diskQueue.peek());
+            swapJobBackIn(top);
+        }
 
         swapJob();
         runJob(a, p);
