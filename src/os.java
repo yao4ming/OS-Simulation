@@ -168,7 +168,7 @@ public class os {
 
             printMemory();
 
-            printFreeSpace();
+            //printFreeSpace();
         }
 
         return startAddr;
@@ -215,8 +215,11 @@ public class os {
 
         for (Job job : jobTable) {
 
-            if (job != null) {
-                if (job.age < 1000) {
+            if (job != null && !job.inCore && !job.inTransit && !drumQueue.contains(job.num)) {
+                if (freeSpace.containsValue(100)) {
+                    drumQueue.add(job.num);
+                }
+                else if (job.age < 1000) {
                     drumQueue.add(job.num);
                 }
                 else if (job.age < 5000) {
@@ -229,7 +232,7 @@ public class os {
                     job.age -= 10;
                 }
                 else {
-                    System.out.println("Add last");
+                    job.age -= 10;
                 }
             }
         }
@@ -268,6 +271,7 @@ public class os {
 
     }
 
+    //returns job that is able to be swapped
     public static Job swappableJob() {
 
         //find job to swap out
@@ -320,23 +324,15 @@ public class os {
         System.out.println("Unblock Job " + job.num);
     }
 
-
-    //if drum not busy, search drumQueue for job that fits into freespace
-    //swap job into freespace
+    //add jobs to drumQueue using priority scheduler
+    //swap jobs into memory if enough space
+    //swap blocked jobs out of memory if drumQueue > 20
     public static void swapJob() {
 
-        if (!drumbusy) {
+        //long term scheduler
+        priorityScheduler();
 
-            //memory is free
-            if (freeSpace.containsValue(100)) {
-                //find a job with high priority
-                for (Job j : jobTable) {
-                    if (j != null) {
-                        drumQueue.add(j.num);
-                        break;
-                    }
-                }
-            }
+        if (!drumbusy) {
 
             //traverse drumQueue for job to swap into memory
             for (int jobNum : drumQueue) {
@@ -348,6 +344,7 @@ public class os {
 
                     //job fits into freespace
                     if (job.size < freeSpace.get(addr)) {
+                        System.out.println(drumQueue);
                         swapIn(jobNum);
                         return;
                     }
@@ -497,7 +494,7 @@ public class os {
 
     public static void updateFreeSpace(int startAddr, int endAddr, int jobSize) {
         //freespace map before update
-        printFreeSpace();
+        //printFreeSpace();
 
         boolean after = false, before = false;
         int freeAddr = -1, freeSize = -1, newSize = -1;
@@ -538,7 +535,7 @@ public class os {
         }
 
         //freespace map after update
-        printFreeSpace();
+        //printFreeSpace();
 
     }
 
@@ -608,12 +605,14 @@ public class os {
         int i = 1;
         for (Job job : jobTable) {
             if(job != null && job.inCore) {
-                System.out.println("Job Num " + job.num + " in memory " + i);
+                System.out.println("Job Num " + job.num + " in memory " + " age " + job.age + "\t" + i);
+                i++;
             }
             else if (job != null) {
-                System.out.println("Job num " + job.num + " priority " + job.priority + " " + i);
+                System.out.println("Job num " + job.num + " priority " + job.priority + " age " + job.age + "\t" + i);
+                i++;
             }
-            i++;
+
         }
         System.out.println();
 
@@ -637,7 +636,7 @@ public class os {
     //job enters drum
     public static void Crint (int[] a, int[] p) {
 
-        //sos.ontrace();
+        sos.ontrace();
 
         Job currJob = currentJob();
         saveJob(currJob, p[5]);
@@ -647,8 +646,6 @@ public class os {
         //store job in jobtable
         jobTable[tableIndex] = new Job(p[1], p[2], p[3], p[4], p[5], 7);
 
-        //long-term scheduler(add job to drumQueue)
-        priorityScheduler();
         swapJob();
         runJob(a, p);
     }
@@ -669,12 +666,16 @@ public class os {
             swappingIN = false;
             job.inCore = true;
             drumQueue.remove(new Integer(job.num));
+            System.out.println(drumQueue);
             jobsInMemory.add(job);
         }
         //swapped out, add job to drumQueue
         else {
             jobsInMemory.remove(job);
             drumQueue.add(job.num);
+            System.out.println(drumQueue);
+            System.out.println();
+
         }
 
         //finish swapping jobs out for I/O job
